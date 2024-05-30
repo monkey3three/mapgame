@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Map Game</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" integrity="sha256-kLaT2GOSpHechhsozzB+flnD+zUyjE2LlfWPgU04xyI=" crossorigin="" />
+    <style>
+        #map { height: 90vh; }
+        .claimed-area { fill: green; fill-opacity: 0.3; }
+        #controls { padding: 10px; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="controls">
+        <label for="claim-size">Claim Size (meters): </label>
+        <input type="number" id="claim-size" value="500" min="100" max="5000">
+        <button id="claim-land">Claim Land</button>
+        <button id="spawn-country">Spawn Country</button>
+        <button id="destroy-country">Destroy Country</button>
+        <button id="spawn-radio-tower">Spawn Radio Tower</button>
+        <button id="spawn-watchtower">Spawn Watchtower</button>
+        <button id="spawn-bunker">Spawn Bunker</button>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js" integrity="sha256-WBkoXOwTeyKclOHuWtc+i2uENFpDZ9YPdf5Hf+D7ewM=" crossorigin=""></script>
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+    <script>
+        // Initialize the map
+        var map = L.map('map').setView([51.505, -0.09], 13);
+
+        // Add a tile layer (replace with your own tile source for offline use)
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        // Store claimed areas
+        var claimedAreaLayer = L.geoJSON(null, {
+            style: {
+                color: 'green',
+                fillOpacity: 0.3
+            }
+        }).addTo(map);
+
+        // Store AI-controlled countries
+        var countryLayer = L.geoJSON(null, {
+            style: {
+                color: 'red',
+                fillOpacity: 0.3
+            }
+        }).addTo(map);
+
+        var claimedArea = turf.featureCollection([]);
+        var countries = turf.featureCollection([]);
+
+        // Store markers
+        var markerLayer = L.layerGroup().addTo(map);
+
+        // Create a marker
+        var marker = L.marker([51.5, -0.09]).addTo(map);
+
+        // Make the marker draggable
+        marker.dragging.enable();
+
+        // Initialize state
+        var state = {
+            action: 'claim', // Possible values: 'claim', 'spawnCountry', 'destroyCountry', 'spawnRadioTower', 'spawnWatchtower', 'spawnBunker'
+            isDragging: false,
+            startLatLng: null
+        };
+
+        // Custom Icons
+        var radioTowerIcon = L.icon({
+            iconUrl: 'radio_tower.png',
+            iconSize: [32, 32]
+        });
+
+        var watchtowerIcon = L.icon({
+            iconUrl: 'watchtower.svg',
+            iconSize: [32, 32]
+        });
+
+        var bunkerIcon = L.icon({
+            iconUrl: 'bunker.png',
+            iconSize: [32, 32]
+        });
+
+        // Add some AI-controlled countries at random locations
+        function addRandomCountries() {
+            for (var i = 0; i < 5; i++) {
+                var coords = [
+                    Math.random() * 360 - 180,
+                    Math.random() * 180 - 90
+                ];
+                var country = turf.circle(coords, 1, { units: 'kilometers' });
+                countries.features.push(country);
+            }
+            countryLayer.addData(countries);
+        }
+
+        // Expand AI countries
+        function expandCountries() {
+            countries.features = countries.features.map(function(country) {
+                return turf.buffer(country, 0.1, { units: 'kilometers' });
+            });
+            countryLayer.clearLayers();
+            countryLayer.addData(countries);
+        }
+
+        // Check if a country is completely covered by claimed area
+        function isCountryCovered(country) {
+            var claimedAreaPolygon = turf.flatten(turf.union(...claimedArea.features));
+            return turf.booleanWithin(country, claimedAreaPolygon);
+        }
+
+        // Function to handle land claiming
+        function claimLand(coords) {
+            var claimRadius = parseInt(document.getElementById('claim-size').value);
+            var newArea = turf.circle([coords.lng, coords.lat], claimRadius / 1000, { units: 'kilometers' });
+
+            if (claimedArea.features.length === 0) {
+                claimedArea = turf.featureCollection([newArea]);
+            } else {
+                var unionArea = claimedArea.features.reduce(function(acc, feature) {
+                    return turf.union(acc, feature);
+                }, newArea);
+                claimedArea = turf.featureCollection([unionArea]);
+            }
+
+            claimedAreaLayer.clearLayers();
+            claimedAreaLayer.addData(claimedArea);
+
+            // Check if any country is completely covered and remove it if so
+            countries.features = countries.features.filter(function(country) {
+                return !isCountryCovered(country);
+            });
+            countryLayer.clearLayers();
+            countryLayer.addData(countries);
+        }
+
+        // Add event listeners for claiming land
+        map.on('mousedown', function(e) {
+            if (state.action === 'claim') {
+                state.isDragging = true;
+                state.startLatLng = e.latlng;
+            }
+        });
+
+        map.on('mousemove', function(e) {
+            if (state.isDragging && state.action === 'claim') {
+                claimLand(e.latlng);
+            }
+        });
+
+        map.on('mouseup', function(e) {
+            if (state.isDragging && state.action === 'claim') {
+                state.isDragging = false;
+            }
+        });
+
+        map.on('click', function(e) {
+            var coords = e.latlng;
+
+            if (state.action === 'spawnCountry') {
+                var newCountry = turf.circle([coords.lng, coords.lat], 1, { units: 'kilometers' });
+                countries.features.push(newCountry);
+                countryLayer.clearLayers();
+                countryLayer.addData(countries);
+            } else if (state.action === 'spawnRadioTower') {
+                L.marker(coords, { icon: radioTowerIcon }).addTo(markerLayer);
+            } else if (state.action === 'spawnWatchtower') {
+                L.marker(coords, { icon: watchtowerIcon }).addTo(markerLayer);
+            } else if (state.action === 'spawnBunker') {
+                L.marker(coords, { icon: bunkerIcon }).addTo(markerLayer);
+            } else if (state.action === 'destroyCountry') {
+                var point = turf.point([coords.lng, coords.lat]);
+                countries.features = countries.features.filter(function(country) {
+                    return !turf.booleanPointInPolygon(point, country);
+                });
+                countryLayer.clearLayers();
+                countryLayer.addData(countries);
+            }
+        });
+
+        // Button to claim land
+        document.getElementById('claim-land').addEventListener('click', function() {
+            state.action = 'claim';
+        });
+
+        // Button to destroy a country by clicking on it
+        document.getElementById('destroy-country').addEventListener('click', function() {
+            state.action = 'destroyCountry';
+        });
+
+        // Button to spawn a new country
+        document.getElementById('spawn-country').addEventListener('click', function() {
+            state.action = 'spawnCountry';
+        });
+
+        // Buttons to spawn different types of markers
+        document.getElementById('spawn-radio-tower').addEventListener('click', function() {
+            state.action = 'spawnRadioTower';
+        });
+
+        document.getElementById('spawn-watchtower').addEventListener('click', function() {
+            state.action = 'spawnWatchtower';
+        });
+
+        document.getElementById('spawn-bunker').addEventListener('click', function() {
+            state.action = 'spawnBunker';
+        });
+
+        // Add AI-controlled countries
+        addRandomCountries();
+
+        // Expand AI countries every 10 seconds
+        setInterval(expandCountries, 10000);
+    </script>
+</body>
+</html>
